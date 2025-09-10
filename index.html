@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>CAPTURA_CAMINOS</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- Leaflet.draw (herramientas de edición) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+
+<!-- Turf.js (mediciones) -->
+<script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+
+<!-- Locate control -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet.locatecontrol@0.78.0/dist/L.Control.Locate.min.css" />
+<script src="https://unpkg.com/leaflet.locatecontrol@0.78.0/dist/L.Control.Locate.min.js"></script>
+
+<style>
+:root{ --gap:10px; --font:12px; --scale:1.05; --brand:#1d4ed8; }
+html,body,#map{ height:100%; margin:0; }
+#map{ touch-action: pan-x pan-y; }
+
+/* Barra arriba-derecha, compacta y en una fila */
+.topbar{
+  position: fixed; z-index: 9999; top: 8px; right: 10px;
+  background: rgba(255,255,255,.95); backdrop-filter: blur(4px);
+  border: 1px solid #ddd; border-radius: 12px; padding: 6px 10px;
+  display: flex; flex-wrap: nowrap; align-items: center; gap: var(--gap);
+  font-size: var(--font); box-shadow: 0 4px 16px rgba(0,0,0,.08);
+}
+.topbar select,.topbar button{
+  font-size: calc(var(--font) * var(--scale));
+  padding: 4px 6px; border-radius: 8px; border: 1px solid #ccc; background: white;
+}
+.topbar select{ width: 120px; }
+@media (max-width:520px){
+  :root{ --gap:6px; --font:11px; }
+  .topbar{ padding:6px; }
+  .topbar label{ display:none; }
+  .topbar select{ width:110px; padding:4px 6px; font-size:12px; }
+  .topbar button{ width:36px; height:36px; padding:0; font-size:20px; line-height:1; }
+}
+
+/* Leyenda abajo-derecha */
+.leyenda{
+  position: fixed; right: 10px; bottom: 10px; z-index: 9999;
+  background: rgba(255,255,255,.95); border:1px solid #ddd; border-radius:12px;
+  padding:8px 10px; font-size:12px; box-shadow:0 4px 16px rgba(0,0,0,.08);
+}
+.leyenda .item{ display:flex; align-items:center; gap:8px; margin:4px 0; }
+.swatch{ display:inline-block; width:34px; height:0; border-top:6px solid; border-radius:4px; }
+.sw-mop{  border-top-color: var(--brand); opacity:.5; }
+.sw-plan{ border-top-color: #f59e0b; border-top-style: dashed; }
+.sw-ejec{ border-top-color: #16a34a; }
+
+/* Distancia */
+.badge{
+  position: fixed; right: 10px; bottom: 60px; z-index: 9999;
+  background: rgba(0,0,0,.75); color:#fff; padding:8px 10px; border-radius:10px;
+  font-size:13px; min-width:160px; text-align:center; display:none;
+}
+
+/* Panel guardar */
+.panel-guardar{
+  position: fixed; left: 10px; bottom: 10px; z-index: 9999;
+  background: rgba(255,255,255,.97); border: 1px solid #ddd; border-radius:12px;
+  padding:10px; display:none; width:280px; box-shadow: 0 4px 16px rgba(0,0,0,.08);
+  font-size:13px;
+}
+.panel-guardar h4{ margin:0 0 8px 0; font-size:14px; }
+.panel-guardar label{ display:block; margin:6px 0 3px; }
+.panel-guardar select,.panel-guardar button{
+  width:100%; padding:8px; border-radius:8px; border:1px solid #ccc; background:white;
+}
+.btn-primario{ background: var(--brand); color:#fff; border-color: var(--brand); }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<!-- Leyenda -->
+<div class="leyenda">
+  <div class="item"><span class="swatch sw-mop"></span><span>Caminos MOP</span></div>
+  <div class="item"><span class="swatch sw-plan"></span><span>Planificación</span></div>
+  <div class="item"><span class="swatch sw-ejec"></span><span>Ejecutado</span></div>
+</div>
+
+<!-- Barra de filtros + botones -->
+<div class="topbar">
+  <div>
+    <label style="display:block; font-size:11px;">Programa</label>
+    <select id="filtroPrograma">
+      <option value="*">Todos</option>
+      <option>PDTI Mañio</option>
+      <option>PDTI Nahuelbuta</option>
+      <option>PDTI IMP_CEN_1</option>
+      <option>PDTI IMP_CEN2</option>
+      <option>PDTI Boroa</option>
+      <option>PRODER</option>
+      <option>Caminos</option>
+    </select>
+  </div>
+  <div>
+    <label style="display:block; font-size:11px;">Indica</label>
+    <select id="filtroIndica">
+      <option value="*">Todos</option>
+      <option>Planificación</option>
+      <option>Ejecutado</option>
+    </select>
+  </div>
+  <div style="display:flex; align-items:center; gap:var(--gap);">
+    <button id="btnBorrarDibujo" title="Borrar dibujo" aria-label="Borrar dibujo">🗑️</button>
+    <button id="btnMiUbicacion" title="Mi ubicación" aria-label="Mi ubicación">📍</button>
+    <button id="btnFinalizar" title="Finalizar línea" aria-label="Finalizar línea" style="display:none;">✔️</button>
+  </div>
+</div>
+
+<!-- Distancia -->
+<div id="badgeDist" class="badge">Distancia: 0 m</div>
+
+<!-- Panel guardar -->
+<div id="panelGuardar" class="panel-guardar">
+  <h4>Guardar nuevo elemento</h4>
+  <label>Programa</label>
+  <select id="pgm">
+    <option>PDTI Mañio</option>
+    <option>PDTI Nahuelbuta</option>
+    <option>PDTI IMP_CEN_1</option>
+    <option>PDTI IMP_CEN2</option>
+    <option>PDTI Boroa</option>
+    <option>PRODER</option>
+    <option>Caminos</option>
+  </select>
+  <label>Indica</label>
+  <select id="tipoIndica">
+    <option>Planificación</option>
+    <option>Ejecutado</option>
+  </select>
+  <div style="display:flex; gap:8px; margin-top:10px;">
+    <button id="btnGuardar" class="btn-primario">💾 Guardar</button>
+    <button id="btnCancelar">Cancelar</button>
+  </div>
+  <p id="msgGuardar" style="margin:8px 0 0; color:#0a7; display:none;">Guardado OK</p>
+  <p id="msgError"   style="margin:8px 0 0; color:#c00; display:none;">Error al guardar</p>
+</div>
+
+<script>
+/* ===== Parámetros ===== */
+const CENTER_LNG = -72.9498;
+const CENTER_LAT = -38.7428;
+const START_ZOOM = 14;
+const LINE_COLOR   = "#1d4ed8";
+const LINE_WEIGHT  = 6;
+const LINE_OPACITY = 0.50;
+const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyph0pS_7AX5R3t2LJuZwRy83-BJre6sk9fPOqVUEereKL-0IFQe0KwSM2wtEGHycIT/exec";
+
+/* Estilo por "Indica" */
+function styleByIndica(indica, geomType){
+  if (geomType === 'Point'){
+    return (indica === 'Planificación')
+      ? { radius:6, color:'#f59e0b', fillColor:'#f59e0b', fillOpacity:.85 }
+      : { radius:6, color:'#16a34a', fillColor:'#16a34a', fillOpacity:.85 };
+  }else{
+    return (indica === 'Planificación')
+      ? { color:'#f59e0b', weight:5, opacity:.9, dashArray:'8 6' }
+      : { color:'#16a34a', weight:5, opacity:.9 };
+  }
+}
+
+/* ===== Mapa & capas base ===== */
+const map = L.map('map', {
+  center: [CENTER_LAT, CENTER_LNG],
+  zoom: START_ZOOM,
+  zoomControl: true,
+  tap: false,               // evita “doble tap” fantasma
+  doubleClickZoom: false    // no queremos que cierre la línea
+});
+
+// Base OSM + Satélite
+const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:20, attribution:'&copy; OpenStreetMap' }).addTo(map);
+const esri = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{ maxZoom:20, attribution:'Tiles &copy; Esri' });
+L.control.layers({ "OSM": osm, "Imagen satelital": esri }, null, { position:'topleft' }).addTo(map);
+
+// Mi ubicación
+// Mi ubicación (alta precisión y sin caché)
+const locateCtrl = L.control.locate({
+  position: 'topleft',
+  flyTo: true,
+  setView: 'untilPanOrZoom',
+  showPopup: false,
+  keepCurrentZoomLevel: false,
+  locateOptions: {
+    enableHighAccuracy: true,  // usa GPS/Wi-Fi si está disponible
+    maximumAge: 0,             // no reutilizar posición antigua
+    timeout: 15000             // hasta 15 s para obtener precisión
+  },
+  strings: { title: 'Ir a mi ubicación' }
+});
+locateCtrl.addTo(map);
+document.getElementById('btnMiUbicacion').addEventListener('click', () => locateCtrl.start());
+
+// Mostrar precisión cuando localiza, y mensaje si falla
+map.on('locationfound', (e) => {
+  const acc = Math.round(e.accuracy || 0);
+  const m = document.getElementById('badgeDist');
+  m.style.display = 'block';
+  m.textContent = `Ubicado (±${acc} m)`;
+  setTimeout(() => { m.style.display = 'none'; }, 2500);
+  // console.log('Location:', e.latlng, 'accuracy:', e.accuracy);
+});
+map.on('locationerror', (e) => {
+  const m = document.getElementById('badgeDist');
+  m.style.display = 'block';
+  m.textContent = `Ubicación no disponible`;
+  setTimeout(() => { m.style.display = 'none'; }, 2500);
+  // console.warn('Location error:', e.message);
+});
+
+
+
+// Capa Caminos (GeoJSON)
+fetch('capa_base.geojson')
+  .then(r => r.json())
+  .then(geojson => L.geoJSON(geojson, { style:{ color:LINE_COLOR, weight:LINE_WEIGHT, opacity:LINE_OPACITY } }).addTo(map))
+  .catch(console.error);
+
+/* ===== Dibujo con Leaflet.draw ===== */
+const drawnItems = L.featureGroup().addTo(map);  // guardados
+const tempItems  = L.featureGroup().addTo(map);  // temporal
+
+const drawControl = new L.Control.Draw({
+  position: 'topleft',
+  draw: {
+    polygon: false, rectangle: false, circle: false, circlemarker: false,
+    marker: true,
+    polyline: {
+      shapeOptions: { color:'#f59e0b', weight:4, opacity:.95 }, // color temporal
+      metric: true
+    }
+  },
+  edit: false
+});
+map.addControl(drawControl);
+
+// mientras se dibuja: deshabilitar gestos que molestan (móvil)
+function disableMapGestures(){
+  map.dragging.disable(); map.touchZoom.disable(); map.boxZoom.disable(); map.keyboard.disable();
+}
+function enableMapGestures(){
+  map.dragging.enable(); map.touchZoom.enable(); map.boxZoom.enable(); map.keyboard.enable();
+}
+
+map.on('draw:drawstart', (e) => {
+  disableMapGestures();
+
+  if (e.layerType === 'polyline'){
+    // 2.A) Bloquea el dblclick SOLO mientras dibujas (evita cierres fantasma)
+    L.DomEvent.on(map._container, 'dblclick', L.DomEvent.stop);
+
+    // 2.B) Desactiva la forma "rápida" de terminar que usa Leaflet.draw
+    const modes = drawControl._toolbars.draw && drawControl._toolbars.draw._modes;
+    if (modes && modes.polyline && modes.polyline.handler){
+      const h = modes.polyline.handler;
+      // anula el método de terminar por click/dblclick
+      h._finishShape = function(){ /* deshabilitado: usar botón ✔️ */ };
+    }
+
+    // 2.C) Muestra el botón ✔️ para finalizar manualmente
+    document.getElementById('btnFinalizar').style.display = 'inline-block';
+  }
+});
+
+map.on('draw:drawstop',  () => {
+  enableMapGestures();
+  // restituye el dblclick cuando sales del modo dibujo
+  L.DomEvent.off(map._container, 'dblclick', L.DomEvent.stop);
+  document.getElementById('btnFinalizar').style.display = 'none';
+});
+
+
+// Estado
+let currentLayer = null;    // temporal
+let currentType  = null;    // 'line' | 'point'
+let currentLenM  = 0;       // metros
+
+const panelGuardar = document.getElementById('panelGuardar');
+const badgeDist    = document.getElementById('badgeDist');
+const msgOk        = document.getElementById('msgGuardar');
+const msgErr       = document.getElementById('msgError');
+
+function showSavePanel(show=true){ panelGuardar.style.display = show ? 'block' : 'none'; msgOk.style.display = 'none'; msgErr.style.display = 'none'; }
+function clearTemp(){ tempItems.clearLayers(); currentLayer=null; currentType=null; currentLenM=0; badgeDist.style.display='none'; showSavePanel(false); }
+
+// Al terminar (doble clic o tap en último vértice; un clic para marker)
+map.on(L.Draw.Event.CREATED, (e) => {
+  clearTemp();
+  currentLayer = e.layer;
+  currentType  = (e.layerType === 'polyline') ? 'line' : 'point';
+  tempItems.addLayer(currentLayer);
+  if (currentType === 'line'){
+    updateDistanceFromLatLngs(currentLayer.getLatLngs());
+    badgeDist.style.display = 'block';
+  }
+  showSavePanel(true);
+  document.getElementById('btnFinalizar').style.display = 'none';
+});
+
+// Mientras agregas vértices → autopan + distancia (sin depender de currentLayer)
+map.on('draw:drawvertex', (e) => {
+  let lastLatLng = null;
+  const verts = [];
+  if (e.layers && e.layers.eachLayer){
+    e.layers.eachLayer(l => { if (l.getLatLng){ const ll=l.getLatLng(); lastLatLng=ll; verts.push(ll);} });
+  }
+  if (lastLatLng) map.panInside(lastLatLng, { padding:[80,80], animate:true });
+  if (verts.length > 1){
+    updateDistanceFromLatLngs(verts);
+    badgeDist.style.display = 'block';
+  }
+});
+
+// Quita cualquier atajo interno que termine la línea al tocar un vértice
+map.on('draw:drawvertex', () => {
+  const modes = drawControl._toolbars.draw && drawControl._toolbars.draw._modes;
+  if (modes && modes.polyline && modes.polyline.handler){
+    const h = modes.polyline.handler;
+    const markers = (h._markers || []);
+    markers.forEach(m => {
+      // quita listeners que podrían invocar terminar la línea
+      m.off('click',   h._finishShape, h);
+      m.off('dblclick',h._finishShape, h);
+    });
+  }
+});
+
+
+// Botones de UI
+document.getElementById('btnBorrarDibujo').addEventListener('click', () => { clearTemp(); });
+document.getElementById('btnCancelar').addEventListener('click', () => { clearTemp(); });
+
+
+
+// ✔️ Finalizar polilínea sin depender de doble-tap
+document.getElementById('btnFinalizar').addEventListener('click', () => {
+  const modes = drawControl._toolbars.draw && drawControl._toolbars.draw._modes;
+  if (modes && modes.polyline && modes.polyline.handler && modes.polyline.handler._enabled){
+    modes.polyline.handler.completeShape(); // dispara draw:created y pasa al flujo normal
+  }
+});
+
+
+
+
+/* ===== Guardar (Sheets) ===== */
+document.getElementById('btnGuardar').addEventListener('click', async () => {
+  if (!currentLayer) return;
+
+  const programa = document.getElementById('pgm').value;
+  const indica   = document.getElementById('tipoIndica').value;
+  const fechaISO = new Date().toISOString();
+
+  const gj   = currentLayer.toGeoJSON();
+  const lenM = (currentType === 'line') ? currentLenM : 0;
+
+  const style = styleByIndica(indica, gj.geometry.type);
+  const layerSaved = (gj.geometry.type === 'Point')
+    ? L.circleMarker(currentLayer.getLatLng(), style)
+    : L.polyline(currentLayer.getLatLngs(), style);
+
+  layerSaved.feature = layerSaved.feature || { type:'Feature', properties:{} };
+  layerSaved.feature.properties = { programa, indica, fecha:fechaISO, tipo:currentType, long_m:lenM };
+  layerSaved.bindPopup(popupHTML(layerSaved.feature.properties));
+
+  const payload = { programa, indica, fecha:fechaISO, tipo:currentType, longitud_m:lenM, geojson:gj };
+
+  try{
+    if(!GAS_WEB_APP_URL || GAS_WEB_APP_URL === "PEGAR_AQUI_URL_WEB_APP") throw new Error("Falta configurar GAS_WEB_APP_URL");
+    const r = await fetch(GAS_WEB_APP_URL, { method:'POST', body: JSON.stringify(payload) });
+    let respJson = null; try{ respJson = await r.json(); }catch(_){}
+    if (!r.ok || !respJson || respJson.ok !== true) throw new Error(respJson && respJson.error ? respJson.error : ('HTTP '+r.status));
+
+    drawnItems.addLayer(layerSaved);
+    clearTemp(); msgOk.style.display='block'; setTimeout(()=> showSavePanel(false), 900);
+  }catch(err){ console.error(err); msgErr.style.display='block'; }
+});
+
+/* ===== Utilidades ===== */
+function updateDistanceFromLatLngs(latlngs){
+  const coords = latlngs.map(ll => [ll.lng, ll.lat]);
+  const km = turf.length(turf.lineString(coords), { units:'kilometers' });
+  currentLenM = Math.round(km * 1000);
+  document.getElementById('badgeDist').textContent = `Distancia: ${currentLenM.toLocaleString('es-CL')} m`;
+}
+function popupHTML(p){
+  const len = (p.tipo === 'line' && p.long_m) ? `<br><b>Longitud:</b> ${Number(p.long_m).toLocaleString('es-CL')} m` : '';
+  return `<b>Fecha:</b> ${new Date(p.fecha).toLocaleString('es-CL')}<br>
+          <b>Programa:</b> ${p.programa}<br>
+          <b>Indica:</b> ${p.indica}${len}`;
+}
+
+/* ===== Cargar guardados desde Sheets ===== */
+async function cargarGuardados(){
+  if(!GAS_WEB_APP_URL || GAS_WEB_APP_URL === "PEGAR_AQUI_URL_WEB_APP") return;
+  try{
+    const r = await fetch(GAS_WEB_APP_URL);
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    const data = await r.json();
+    data.forEach(row => {
+      const g = row.geojson;
+      const props = { programa: row.programa, indica: row.indica, fecha: row.fecha, tipo: row.tipo, long_m: Number(row.longitud_m || 0) };
+      const style = styleByIndica(props.indica, g.geometry.type);
+      let layer;
+      if (g.geometry.type === 'Point'){
+        const [lng,lat] = g.geometry.coordinates;
+        layer = L.circleMarker([lat,lng], style);
+      }else{
+        const coords = g.geometry.coordinates.map(([lng,lat]) => [lat,lng]);
+        layer = L.polyline(coords, style);
+      }
+      layer.feature = { type:'Feature', properties: props };
+      layer.bindPopup(popupHTML(props));
+      drawnItems.addLayer(layer);
+    });
+  }catch(err){ console.warn('No se pudieron cargar guardados:', err); }
+}
+cargarGuardados();
+
+/* ===== Filtros ===== */
+function aplicarFiltros(){
+  const fProg = document.getElementById('filtroPrograma').value;
+  const fIndi = document.getElementById('filtroIndica').value;
+  drawnItems.eachLayer(layer => {
+    const p = (layer.feature && layer.feature.properties) ? layer.feature.properties : {};
+    const visible = ( (fProg==='*'||p.programa===fProg) && (fIndi==='*'||p.indica===fIndi) );
+    if (visible){ if (!map.hasLayer(layer)) layer.addTo(map); } else { if (map.hasLayer(layer)) layer.removeFrom(map); }
+  });
+}
+document.getElementById('filtroPrograma').addEventListener('change', aplicarFiltros);
+document.getElementById('filtroIndica').addEventListener('change', aplicarFiltros);
+</script>
+</body>
+</html>
